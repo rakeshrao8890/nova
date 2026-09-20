@@ -1,7 +1,7 @@
 {
-  "name": "true-walk-app",
+  "name": "nove",
   "version": "1.0.0",
-  "description": "TRUE WALK APP",
+  "description": "NOVE APP",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
