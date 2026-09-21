@@ -5,20 +5,33 @@ const path = require('path');
 const crypto = require('crypto');
 const mongoose = require('mongoose');
 const session = require('express-session');
+
 const MongoStore =
-  require('connect-mongo').default || require('connect-mongo');
+  require('connect-mongo').default ||
+  require('connect-mongo');
 
 const app = express();
 
-const PORT = process.env.PORT || 3000;
+const PORT =
+  process.env.PORT || 3000;
 
 app.set('trust proxy', 1);
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(
+  express.json({
+    limit: '2mb'
+  })
+);
+
+app.use(
+  express.urlencoded({
+    extended: true,
+    limit: '2mb'
+  })
+);
 
 // =====================================================
-// ENVIRONMENT
+// CONFIG
 // =====================================================
 
 const MONGO_URI =
@@ -27,7 +40,7 @@ const MONGO_URI =
 
 const SESSION_SECRET =
   process.env.SESSION_SECRET ||
-  'CHANGE_THIS_SESSION_SECRET';
+  'change-this-session-secret';
 
 const ADMIN_USERNAME =
   process.env.ADMIN_USERNAME || '';
@@ -35,19 +48,44 @@ const ADMIN_USERNAME =
 const ADMIN_PASSWORD =
   process.env.ADMIN_PASSWORD || '';
 
-if (!MONGO_URI) {
-  console.error(
-    'ERROR: MONGODB_URI / MONGO_URI is missing.'
-  );
-  process.exit(1);
-}
-
-// =====================================================
-// APP URL
-// =====================================================
-
 const APP_URL =
-  (process.env.APP_URL || '').replace(/\/+$/, '');
+  String(
+    process.env.APP_URL || ''
+  ).replace(/\/$/, '');
+
+
+// =====================================================
+// RS PAYMENT CONFIG
+// =====================================================
+
+const RSPAY_MERCHANT_ID =
+  process.env.RSPAY_MERCHANT_ID || '';
+
+const RSPAY_ACCESS_KEY =
+  process.env.RSPAY_ACCESS_KEY || '';
+
+const RSPAY_API_URL =
+  process.env.RSPAY_API_URL || '';
+
+const RSPAY_WITHDRAW_URL =
+  process.env.RSPAY_WITHDRAW_URL || '';
+
+const RSPAY_WEBHOOK_URL =
+  process.env.RSPAY_WEBHOOK_URL ||
+  (
+    APP_URL
+      ? `${APP_URL}/api/payment/webhook`
+      : ''
+  );
+
+const RSPAY_RETURN_URL =
+  process.env.RSPAY_RETURN_URL ||
+  (
+    APP_URL
+      ? `${APP_URL}/`
+      : ''
+  );
+
 
 // =====================================================
 // WATCHPAYS CONFIG
@@ -72,527 +110,50 @@ const WATCHPAYS_PAYOUT_URL =
 
 const WATCHPAYS_PAYIN_CALLBACK =
   process.env.WATCHPAYS_PAYIN_CALLBACK ||
-  (APP_URL
-    ? `${APP_URL}/api/watchpays/callback`
-    : '');
+  (
+    APP_URL
+      ? `${APP_URL}/api/watchpays/callback`
+      : ''
+  );
 
 const WATCHPAYS_PAYOUT_CALLBACK =
   process.env.WATCHPAYS_PAYOUT_CALLBACK ||
-  (APP_URL
-    ? `${APP_URL}/api/watchpays/payout-callback`
-    : '');
-
-// =====================================================
-// SCHEMAS
-// =====================================================
-
-const userSchema = new mongoose.Schema(
-  {
-    name: {
-      type: String,
-      required: true,
-      trim: true
-    },
-
-    phone: {
-      type: String,
-      required: true,
-      unique: true,
-      index: true,
-      trim: true
-    },
-
-    salt: {
-      type: String,
-      required: true
-    },
-
-    password_hash: {
-      type: String,
-      required: true
-    },
-
-    referral_code: {
-      type: String,
-      required: true,
-      unique: true,
-      index: true
-    },
-
-    referred_by: {
-      type: String,
-      default: null,
-      index: true
-    },
-
-    banned: {
-      type: Boolean,
-      default: false,
-      index: true
-    },
-
-    vip_level: {
-      type: Number,
-      default: 0
-    },
-
-    created_at: {
-      type: Date,
-      default: Date.now
-    },
-
-    last_activity_at: {
-      type: Date,
-      default: Date.now
-    }
-  }
-);
-
-const walletSchema = new mongoose.Schema({
-  user_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true,
-    unique: true,
-    index: true
-  },
-
-  balance: {
-    type: Number,
-    default: 0
-  },
-
-  updated_at: {
-    type: Date,
-    default: Date.now
-  }
-});
-
-const walletTransactionSchema =
-  new mongoose.Schema({
-    user_id: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-      required: true,
-      index: true
-    },
-
-    type: {
-      type: String,
-      required: true,
-      enum: [
-        'credit',
-        'debit',
-        'refund'
-      ]
-    },
-
-    amount: {
-      type: Number,
-      required: true
-    },
-
-    balance_after: {
-      type: Number,
-      required: true
-    },
-
-    reference_type: {
-      type: String,
-      default: null
-    },
-
-    reference_id: {
-      type: String,
-      default: null
-    },
-
-    created_at: {
-      type: Date,
-      default: Date.now
-    }
-  });
-
-walletTransactionSchema.index(
-  {
-    reference_type: 1,
-    reference_id: 1,
-    type: 1
-  },
-  {
-    unique: true,
-    sparse: true
-  }
-);
-
-const paymentSchema =
-  new mongoose.Schema({
-    user_id: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-      required: true,
-      index: true
-    },
-
-    plan: {
-      type: String,
-      default: null
-    },
-
-    amount: {
-      type: Number,
-      required: true
-    },
-
-    currency: {
-      type: String,
-      default: 'INR'
-    },
-
-    merchant_order_id: {
-      type: String,
-      unique: true,
-      sparse: true,
-      index: true
-    },
-
-    platform_order_id: {
-      type: String,
-      default: null
-    },
-
-    pay_url: {
-      type: String,
-      default: null
-    },
-
-    gateway: {
-      type: String,
-      default: 'WATCHPAYS'
-    },
-
-    status: {
-      type: String,
-      default: 'created',
-      index: true
-    },
-
-    created_at: {
-      type: Date,
-      default: Date.now
-    },
-
-    paid_at: {
-      type: Date,
-      default: null
-    }
-  });
-
-const withdrawalSchema =
-  new mongoose.Schema({
-    user_id: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-      required: true,
-      index: true
-    },
-
-    amount: {
-      type: Number,
-      required: true
-    },
-
-    currency: {
-      type: String,
-      default: 'INR'
-    },
-
-    method: {
-      type: String,
-      default: 'BANK'
-    },
-
-    upi_id: {
-      type: String,
-      default: null
-    },
-
-    account_name: {
-      type: String,
-      default: null
-    },
-
-    account_number: {
-      type: String,
-      default: null
-    },
-
-    account_last4: {
-      type: String,
-      default: null
-    },
-
-    bank_name: {
-      type: String,
-      default: null
-    },
-
-    ifsc: {
-      type: String,
-      default: null
-    },
-
-    gateway: {
-      type: String,
-      default: null
-    },
-
-    gateway_transaction_id: {
-      type: String,
-      default: null
-    },
-
-    gateway_fee: {
-      type: Number,
-      default: 0
-    },
-
-    status: {
-      type: String,
-      default: 'pending',
-      index: true
-    },
-
-    created_at: {
-      type: Date,
-      default: Date.now
-    },
-
-    processed_at: {
-      type: Date,
-      default: null
-    }
-  });
-
-const planSchema =
-  new mongoose.Schema({
-    name: {
-      type: String,
-      required: true
-    },
-
-    amount: {
-      type: Number,
-      required: true
-    },
-
-    duration_days: {
-      type: Number,
-      default: 0
-    },
-
-    daily_return: {
-      type: Number,
-      default: 0
-    },
-
-    total_return: {
-      type: Number,
-      default: 0
-    },
-
-    active: {
-      type: Boolean,
-      default: true
-    },
-
-    created_at: {
-      type: Date,
-      default: Date.now
-    }
-  });
-
-const investmentSchema =
-  new mongoose.Schema({
-    user_id: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-      required: true,
-      index: true
-    },
-
-    plan_id: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Plan',
-      default: null
-    },
-
-    plan_name: {
-      type: String,
-      default: null
-    },
-
-    amount: {
-      type: Number,
-      required: true
-    },
-
-    status: {
-      type: String,
-      default: 'active'
-    },
-
-    started_at: {
-      type: Date,
-      default: Date.now
-    },
-
-    expires_at: {
-      type: Date,
-      default: null
-    }
-  });
-
-const notificationSchema =
-  new mongoose.Schema({
-    user_id: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-      required: true,
-      index: true
-    },
-
-    title: {
-      type: String,
-      default: ''
-    },
-
-    message: {
-      type: String,
-      default: ''
-    },
-
-    read: {
-      type: Boolean,
-      default: false
-    },
-
-    created_at: {
-      type: Date,
-      default: Date.now
-    }
-  });
-
-const platformSettingsSchema =
-  new mongoose.Schema({
-    key: {
-      type: String,
-      unique: true,
-      required: true
-    },
-
-    value: {
-      type: mongoose.Schema.Types.Mixed,
-      default: null
-    },
-
-    updated_at: {
-      type: Date,
-      default: Date.now
-    }
-  });
-
-const adminActivitySchema =
-  new mongoose.Schema({
-    action: {
-      type: String,
-      required: true
-    },
-
-    user_id: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-      default: null
-    },
-
-    details: {
-      type: mongoose.Schema.Types.Mixed,
-      default: null
-    },
-
-    created_at: {
-      type: Date,
-      default: Date.now
-    }
-  });
-
-const User =
-  mongoose.models.User ||
-  mongoose.model('User', userSchema);
-
-const Wallet =
-  mongoose.models.Wallet ||
-  mongoose.model('Wallet', walletSchema);
-
-const WalletTransaction =
-  mongoose.models.WalletTransaction ||
-  mongoose.model(
-    'WalletTransaction',
-    walletTransactionSchema
+  (
+    APP_URL
+      ? `${APP_URL}/api/watchpays/payout-callback`
+      : ''
   );
 
-const Payment =
-  mongoose.models.Payment ||
-  mongoose.model(
-    'Payment',
-    paymentSchema
-  );
-
-const Withdrawal =
-  mongoose.models.Withdrawal ||
-  mongoose.model(
-    'Withdrawal',
-    withdrawalSchema
-  );
-
-const Plan =
-  mongoose.models.Plan ||
-  mongoose.model(
-    'Plan',
-    planSchema
-  );
-
-const Investment =
-  mongoose.models.Investment ||
-  mongoose.model(
-    'Investment',
-    investmentSchema
-  );
-
-const Notification =
-  mongoose.models.Notification ||
-  mongoose.model(
-    'Notification',
-    notificationSchema
-  );
-
-const PlatformSettings =
-  mongoose.models.PlatformSettings ||
-  mongoose.model(
-    'PlatformSettings',
-    platformSettingsSchema
-  );
-
-const AdminActivity =
-  mongoose.models.AdminActivity ||
-  mongoose.model(
-    'AdminActivity',
-    adminActivitySchema
-  );
 
 // =====================================================
 // HELPERS
 // =====================================================
+
+function moneyToPaise(value) {
+  const number = Number(value);
+
+  if (!Number.isFinite(number)) {
+    return 0;
+  }
+
+  return Math.round(number * 100);
+}
+
+function paiseToMoney(value) {
+  return Number(
+    Number(value || 0) / 100
+  );
+}
+
+function makeRef(prefix = 'REF') {
+  return (
+    prefix +
+    '_' +
+    Date.now().toString(36) +
+    '_' +
+    crypto.randomBytes(5).toString('hex')
+  ).toUpperCase();
+}
 
 function createSalt() {
   return crypto
@@ -605,12 +166,11 @@ function hashPassword(
   salt
 ) {
   return crypto
-    .scryptSync(
-      String(password),
-      salt,
-      64
+    .createHash('sha256')
+    .update(
+      `${salt}:${password}`
     )
-    .toString('hex');
+    .digest('hex');
 }
 
 function verifyPassword(
@@ -618,73 +178,658 @@ function verifyPassword(
   salt,
   passwordHash
 ) {
-  try {
-    const hash =
-      hashPassword(
-        password,
-        salt
-      );
-
-    const a =
-      Buffer.from(hash, 'hex');
-
-    const b =
-      Buffer.from(passwordHash, 'hex');
-
-    if (a.length !== b.length) {
-      return false;
-    }
-
-    return crypto.timingSafeEqual(
-      a,
-      b
-    );
-  } catch {
-    return false;
-  }
-}
-
-function makeRef(prefix = 'NV') {
   return (
-    prefix +
-    '_' +
-    Date.now() +
-    '_' +
-    crypto
-      .randomBytes(5)
-      .toString('hex')
+    hashPassword(
+      password,
+      salt
+    ) === passwordHash
   );
 }
 
-function moneyToPaise(amount) {
-  return Math.round(
-    Number(amount) * 100
-  );
-}
 
-function paiseToMoney(amount) {
-  return Number(amount || 0) / 100;
-}
+// =====================================================
+// WATCHPAYS PAY-IN SIGNATURE
+// =====================================================
 
-function safeUser(user) {
-  if (!user) return null;
-
-  return {
-    id: user._id,
-    name: user.name,
-    phone: user.phone,
-    referral_code:
-      user.referral_code,
-    referred_by:
-      user.referred_by,
-    vip_level:
-      user.vip_level || 0,
-    banned:
-      user.banned === true,
-    created_at:
-      user.created_at
+function watchPayinSignature({
+  merchant_id,
+  amount,
+  merchant_order_no,
+  callback_url
+}) {
+  const fields = {
+    amount,
+    callback_url,
+    merchant_id,
+    merchant_order_no
   };
+
+  const query =
+    Object.keys(fields)
+      .filter(
+        key =>
+          fields[key] !== undefined &&
+          fields[key] !== null &&
+          String(fields[key]) !== ''
+      )
+      .sort()
+      .map(
+        key =>
+          `${key}=${fields[key]}`
+      )
+      .join('&');
+
+  return crypto
+    .createHash('md5')
+    .update(
+      `${query}&key=${WATCHPAYS_API_KEY}`
+    )
+    .digest('hex');
 }
+
+
+// =====================================================
+// WATCHPAYS PAYOUT SIGNATURE
+// =====================================================
+
+function watchPayoutSignature(data) {
+  const raw =
+    `${data.account_number}` +
+    `${data.amount}` +
+    `${data.bank_name}` +
+    `${data.callback_url}` +
+    `${data.ifsc}` +
+    `${data.merchant_id}` +
+    `${data.name}` +
+    `${data.transaction_id}` +
+    `${WATCHPAYS_PAYOUT_KEY}`;
+
+  return crypto
+    .createHash('md5')
+    .update(raw)
+    .digest('hex');
+}
+
+
+// =====================================================
+// USER SCHEMA
+// =====================================================
+
+const UserSchema =
+  new mongoose.Schema(
+    {
+      name: {
+        type: String,
+        default: ''
+      },
+
+      phone: {
+        type: String,
+        unique: true,
+        required: true,
+        index: true
+      },
+
+      salt: {
+        type: String,
+        required: true
+      },
+
+      password_hash: {
+        type: String,
+        required: true
+      },
+
+      referral_code: {
+        type: String,
+        unique: true,
+        required: true,
+        index: true
+      },
+
+      referred_by: {
+        type: String,
+        default: null
+      },
+
+      banned: {
+        type: Boolean,
+        default: false
+      },
+
+      vip_level: {
+        type: Number,
+        default: 0
+      },
+
+      created_at: {
+        type: Date,
+        default: Date.now
+      }
+    },
+    {
+      collection: 'users'
+    }
+  );
+
+const User =
+  mongoose.model(
+    'User',
+    UserSchema
+  );
+
+
+// =====================================================
+// WALLET
+// =====================================================
+
+const WalletSchema =
+  new mongoose.Schema(
+    {
+      user_id: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        unique: true,
+        required: true,
+        index: true
+      },
+
+      balance: {
+        type: Number,
+        default: 0
+      },
+
+      updated_at: {
+        type: Date,
+        default: Date.now
+      }
+    },
+    {
+      collection: 'wallets'
+    }
+  );
+
+const Wallet =
+  mongoose.model(
+    'Wallet',
+    WalletSchema
+  );
+
+
+// =====================================================
+// WALLET TRANSACTION
+// =====================================================
+
+const WalletTransactionSchema =
+  new mongoose.Schema(
+    {
+      user_id: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true,
+        index: true
+      },
+
+      type: {
+        type: String,
+        enum: [
+          'credit',
+          'debit',
+          'refund'
+        ],
+        required: true
+      },
+
+      amount: {
+        type: Number,
+        required: true
+      },
+
+      balance_after: {
+        type: Number,
+        required: true
+      },
+
+      reference_type: {
+        type: String,
+        default: ''
+      },
+
+      reference_id: {
+        type: String,
+        default: ''
+      },
+
+      created_at: {
+        type: Date,
+        default: Date.now
+      }
+    },
+    {
+      collection:
+        'wallet_transactions'
+    }
+  );
+
+WalletTransactionSchema.index(
+  {
+    reference_type: 1,
+    reference_id: 1,
+    type: 1
+  },
+  {
+    unique: true,
+    sparse: true
+  }
+);
+
+const WalletTransaction =
+  mongoose.model(
+    'WalletTransaction',
+    WalletTransactionSchema
+  );
+
+
+// =====================================================
+// PAYMENT
+// =====================================================
+
+const PaymentSchema =
+  new mongoose.Schema(
+    {
+      user_id: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true,
+        index: true
+      },
+
+      plan: {
+        type: String,
+        default: null
+      },
+
+      amount: {
+        type: Number,
+        required: true
+      },
+
+      currency: {
+        type: String,
+        default: 'INR'
+      },
+
+      merchant_order_id: {
+        type: String,
+        unique: true,
+        required: true,
+        index: true
+      },
+
+      platform_order_id: {
+        type: String,
+        default: null,
+        index: true
+      },
+
+      pay_url: {
+        type: String,
+        default: null
+      },
+
+      gateway: {
+        type: String,
+        default: 'RSPAY'
+      },
+
+      status: {
+        type: String,
+        default: 'created',
+        index: true
+      },
+
+      created_at: {
+        type: Date,
+        default: Date.now
+      },
+
+      paid_at: {
+        type: Date,
+        default: null
+      }
+    },
+    {
+      collection: 'payments'
+    }
+  );
+
+const Payment =
+  mongoose.model(
+    'Payment',
+    PaymentSchema
+  );
+
+
+// =====================================================
+// WITHDRAWAL
+// =====================================================
+
+const WithdrawalSchema =
+  new mongoose.Schema(
+    {
+      user_id: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true,
+        index: true
+      },
+
+      amount: {
+        type: Number,
+        required: true
+      },
+
+      currency: {
+        type: String,
+        default: 'INR'
+      },
+
+      method: {
+        type: String,
+        enum: [
+          'UPI',
+          'BANK'
+        ],
+        required: true
+      },
+
+      upi_id: {
+        type: String,
+        default: null
+      },
+
+      account_name: {
+        type: String,
+        default: null
+      },
+
+      account_number: {
+        type: String,
+        default: null
+      },
+
+      account_last4: {
+        type: String,
+        default: null
+      },
+
+      ifsc: {
+        type: String,
+        default: null
+      },
+
+      bank_name: {
+        type: String,
+        default: null
+      },
+
+      gateway: {
+        type: String,
+        default: null
+      },
+
+      gateway_transaction_id: {
+        type: String,
+        default: null,
+        index: true
+      },
+
+      gateway_fee: {
+        type: Number,
+        default: 0
+      },
+
+      status: {
+        type: String,
+        enum: [
+          'pending',
+          'processing',
+          'completed',
+          'rejected'
+        ],
+        default: 'pending',
+        index: true
+      },
+
+      created_at: {
+        type: Date,
+        default: Date.now
+      },
+
+      processed_at: {
+        type: Date,
+        default: null
+      }
+    },
+    {
+      collection: 'withdrawals'
+    }
+  );
+
+const Withdrawal =
+  mongoose.model(
+    'Withdrawal',
+    WithdrawalSchema
+  );
+
+
+// =====================================================
+// PLAN
+// =====================================================
+
+const PlanSchema =
+  new mongoose.Schema(
+    {
+      name: String,
+
+      amount: Number,
+
+      duration_days: Number,
+
+      daily_return: Number,
+
+      total_return: Number,
+
+      active: {
+        type: Boolean,
+        default: true
+      },
+
+      created_at: {
+        type: Date,
+        default: Date.now
+      }
+    },
+    {
+      collection: 'plans'
+    }
+  );
+
+const Plan =
+  mongoose.model(
+    'Plan',
+    PlanSchema
+  );
+
+
+// =====================================================
+// INVESTMENT
+// =====================================================
+
+const InvestmentSchema =
+  new mongoose.Schema(
+    {
+      user_id: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true,
+        index: true
+      },
+
+      plan_id: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Plan',
+        default: null
+      },
+
+      plan_name: {
+        type: String,
+        default: null
+      },
+
+      amount: Number,
+
+      status: {
+        type: String,
+        default: 'active'
+      },
+
+      started_at: {
+        type: Date,
+        default: Date.now
+      },
+
+      expires_at: {
+        type: Date,
+        default: null
+      }
+    },
+    {
+      collection: 'investments'
+    }
+  );
+
+const Investment =
+  mongoose.model(
+    'Investment',
+    InvestmentSchema
+  );
+
+
+// =====================================================
+// NOTIFICATION
+// =====================================================
+
+const NotificationSchema =
+  new mongoose.Schema(
+    {
+      user_id: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true,
+        index: true
+      },
+
+      title: {
+        type: String,
+        required: true
+      },
+
+      message: {
+        type: String,
+        required: true
+      },
+
+      read: {
+        type: Boolean,
+        default: false
+      },
+
+      created_at: {
+        type: Date,
+        default: Date.now
+      }
+    },
+    {
+      collection: 'notifications'
+    }
+  );
+
+const Notification =
+  mongoose.model(
+    'Notification',
+    NotificationSchema
+  );
+
+
+// =====================================================
+// PLATFORM SETTINGS
+// =====================================================
+
+const PlatformSettingsSchema =
+  new mongoose.Schema(
+    {
+      key: {
+        type: String,
+        unique: true,
+        required: true
+      },
+
+      value: mongoose.Schema.Types.Mixed,
+
+      updated_at: {
+        type: Date,
+        default: Date.now
+      }
+    },
+    {
+      collection:
+        'platform_settings'
+    }
+  );
+
+const PlatformSettings =
+  mongoose.model(
+    'PlatformSettings',
+    PlatformSettingsSchema
+  );
+
+
+// =====================================================
+// ADMIN ACTIVITY
+// =====================================================
+
+const AdminActivitySchema =
+  new mongoose.Schema(
+    {
+      action: String,
+
+      admin: String,
+
+      details:
+        mongoose.Schema.Types.Mixed,
+
+      created_at: {
+        type: Date,
+        default: Date.now
+      }
+    },
+    {
+      collection:
+        'admin_activity'
+    }
+  );
+
+const AdminActivity =
+  mongoose.model(
+    'AdminActivity',
+    AdminActivitySchema
+  );
+
+
+// =====================================================
+// WALLET HELPER
+// =====================================================
 
 async function ensureWallet(
   userId,
@@ -693,40 +838,92 @@ async function ensureWallet(
   let wallet =
     await Wallet.findOne({
       user_id: userId
-    }).session(mongoSession);
+    }).session(
+      mongoSession || null
+    );
 
   if (!wallet) {
-    const created =
-      await Wallet.create(
-        [
-          {
-            user_id: userId,
-            balance: 0,
-            updated_at: new Date()
-          }
-        ],
-        mongoSession
-          ? { session: mongoSession }
-          : undefined
-      );
+    try {
+      const created =
+        await Wallet.create(
+          [
+            {
+              user_id: userId,
+              balance: 0,
+              updated_at:
+                new Date()
+            }
+          ],
+          mongoSession
+            ? {
+                session:
+                  mongoSession
+              }
+            : undefined
+        );
 
-    wallet = created[0];
+      wallet =
+        created[0];
+    } catch (error) {
+      if (
+        error.code === 11000
+      ) {
+        wallet =
+          await Wallet.findOne({
+            user_id: userId
+          }).session(
+            mongoSession || null
+          );
+      } else {
+        throw error;
+      }
+    }
   }
 
   return wallet;
 }
 
-function admin(req, res, next) {
-  if (!req.session?.isAdmin) {
-    return res.status(401).json({
-      success: false,
-      message:
-        'Admin login required.'
-    });
+
+// =====================================================
+// SAFE USER
+// =====================================================
+
+function safeUser(user) {
+  if (!user) {
+    return null;
   }
 
-  next();
+  return {
+    id:
+      user._id,
+
+    name:
+      user.name,
+
+    phone:
+      user.phone,
+
+    referral_code:
+      user.referral_code,
+
+    referred_by:
+      user.referred_by,
+
+    banned:
+      user.banned === true,
+
+    vip_level:
+      user.vip_level || 0,
+
+    created_at:
+      user.created_at
+  };
 }
+
+
+// =====================================================
+// LOGIN MIDDLEWARE
+// =====================================================
 
 async function login(
   req,
@@ -734,7 +931,11 @@ async function login(
   next
 ) {
   try {
-    if (!req.session?.userId) {
+    if (
+      !req.session ||
+      !req.session.userId ||
+      req.session.isAdmin
+    ) {
       return res.status(401).json({
         success: false,
         message:
@@ -748,202 +949,107 @@ async function login(
       );
 
     if (!user) {
-      req.session.destroy(() => {});
-
       return res.status(401).json({
         success: false,
         message:
-          'User account not found.'
+          'User not found.'
       });
     }
 
     if (user.banned) {
-      req.session.destroy(() => {});
-
       return res.status(403).json({
         success: false,
         message:
-          'Your account has been banned.'
+          'Account is banned.'
       });
     }
 
-    user.last_activity_at =
-      new Date();
-
-    await user.save();
-
-    req.currentUser = user;
+    req.user = user;
 
     next();
   } catch (error) {
-    console.error(
-      'Login middleware error:',
-      error
-    );
-
-    res.status(500).json({
-      success: false,
-      message:
-        'Authentication error.'
-    });
+    next(error);
   }
 }
 
+
 // =====================================================
-// WATCHPAYS SIGNATURE - PAYIN
+// ADMIN MIDDLEWARE
 // =====================================================
 
-function watchPayinSignature({
-  merchant_id,
-  amount,
-  merchant_order_no,
-  callback_url
-}) {
-  const values = {
-    amount:
-      Number(amount).toFixed(2),
+function admin(
+  req,
+  res,
+  next
+) {
+  if (
+    !req.session ||
+    req.session.isAdmin !== true
+  ) {
+    return res.status(401).json({
+      success: false,
+      message:
+        'Admin login required.'
+    });
+  }
 
-    callback_url:
-      callback_url,
-
-    merchant_id:
-      merchant_id,
-
-    merchant_order_no:
-      merchant_order_no
-  };
-
-  const query =
-    Object.keys(values)
-      .sort()
-      .filter(
-        key =>
-          values[key] !== undefined &&
-          values[key] !== null &&
-          values[key] !== ''
-      )
-      .map(
-        key =>
-          `${key}=${values[key]}`
-      )
-      .join('&');
-
-  return crypto
-    .createHash('md5')
-    .update(
-      `${query}&key=${WATCHPAYS_API_KEY}`
-    )
-    .digest('hex');
+  next();
 }
 
-// =====================================================
-// WATCHPAYS SIGNATURE - PAYOUT
-// =====================================================
-
-function watchPayoutSignature({
-  merchant_id,
-  amount,
-  transaction_id,
-  account_number,
-  ifsc,
-  name,
-  bank_name,
-  callback_url
-}) {
-  const values = {
-    account_number,
-    amount:
-      Number(amount).toFixed(2),
-    bank_name,
-    callback_url,
-    ifsc,
-    merchant_id,
-    name,
-    transaction_id
-  };
-
-  const sorted =
-    Object.keys(values)
-      .sort()
-      .map(
-        key =>
-          String(values[key] ?? '')
-      )
-      .join('');
-
-  return crypto
-    .createHash('md5')
-    .update(
-      sorted +
-      WATCHPAYS_PAYOUT_KEY
-    )
-    .digest('hex');
-}
 
 // =====================================================
 // SESSION
 // =====================================================
 
-const isProduction =
-  process.env.NODE_ENV === 'production';
+if (!MONGO_URI) {
+  console.error(
+    'MONGODB_URI / MONGO_URI is missing.'
+  );
+}
 
 app.use(
   session({
     name: 'nove.sid',
 
-    secret: SESSION_SECRET,
+    secret:
+      SESSION_SECRET,
 
     resave: false,
 
     saveUninitialized: false,
 
-    proxy: true,
+    store:
+      MongoStore.create({
+        mongoUrl:
+          MONGO_URI,
 
-    store: MongoStore.create({
-      mongoUrl: MONGO_URI,
-      collectionName: 'sessions',
-      ttl:
-        14 * 24 * 60 * 60
-    }),
+        ttl:
+          60 * 60 * 24 * 14
+      }),
 
     cookie: {
+      maxAge:
+        1000 *
+        60 *
+        60 *
+        24 *
+        14,
+
       httpOnly: true,
 
-      secure: isProduction,
+      secure:
+        process.env.NODE_ENV ===
+        'production',
 
       sameSite:
-        isProduction
+        process.env.NODE_ENV ===
+        'production'
           ? 'none'
-          : 'lax',
-
-      maxAge:
-        14 *
-        24 *
-        60 *
-        60 *
-        1000
+          : 'lax'
     }
   })
 );
 
-// =====================================================
-// HOME PROTECTION
-// =====================================================
-
-app.get(
-  '/home.html',
-  (req, res, next) => {
-    if (
-      !req.session?.userId
-    ) {
-      return res.redirect(
-        '/login.html'
-      );
-    }
-
-    next();
-  }
-);
 
 // =====================================================
 // REGISTER
@@ -960,7 +1066,9 @@ app.post(
 
       const phone =
         String(
-          req.body.phone || ''
+          req.body.phone ||
+          req.body.mobile ||
+          ''
         ).trim();
 
       const password =
@@ -970,47 +1078,70 @@ app.post(
 
       const referral =
         String(
-          req.body.referral_code ||
           req.body.referral ||
+          req.body.referral_code ||
           ''
-        ).trim()
-        .toUpperCase();
-
-      if (!name) {
-        return res.status(400).json({
-          success: false,
-          message:
-            'Name is required.'
-        });
-      }
+        ).trim();
 
       if (!phone) {
         return res.status(400).json({
           success: false,
           message:
-            'Phone is required.'
+            'Mobile number is required.'
         });
       }
 
-      if (password.length < 6) {
+      if (
+        password.length < 4
+      ) {
         return res.status(400).json({
           success: false,
           message:
-            'Password must be at least 6 characters.'
+            'Password must be at least 4 characters.'
         });
       }
 
-      const exists =
+      const existing =
         await User.findOne({
           phone
         });
 
-      if (exists) {
+      if (existing) {
         return res.status(409).json({
           success: false,
           message:
-            'Phone number is already registered.'
+            'Mobile number already registered.'
         });
+      }
+
+      let referralCode;
+
+      for (let i = 0; i < 10; i++) {
+        const candidate =
+          (
+            'NOVA' +
+            crypto
+              .randomBytes(4)
+              .toString('hex')
+          ).toUpperCase();
+
+        const exists =
+          await User.findOne({
+            referral_code:
+              candidate
+          });
+
+        if (!exists) {
+          referralCode =
+            candidate;
+          break;
+        }
+      }
+
+      if (!referralCode) {
+        throw new Error(
+          'Unable to generate referral code.'
+        );
       }
 
       const salt =
@@ -1022,76 +1153,34 @@ app.post(
           salt
         );
 
-      let referralCode;
-
-      for (;;) {
-        referralCode =
-          crypto
-            .randomBytes(4)
-            .toString('hex')
-            .toUpperCase();
-
-        const existsCode =
-          await User.findOne({
-            referral_code:
-              referralCode
-          });
-
-        if (!existsCode) break;
-      }
-
-      let referredBy = null;
-
-      if (referral) {
-        const referrer =
-          await User.findOne({
-            referral_code:
-              referral
-          });
-
-        if (referrer) {
-          referredBy =
-            referrer.referral_code;
-        }
-      }
-
       const user =
         await User.create({
           name,
+
           phone,
+
           salt,
+
           password_hash:
             passwordHash,
+
           referral_code:
             referralCode,
+
           referred_by:
-            referredBy,
-          banned: false,
-          vip_level: 0,
-          created_at:
-            new Date(),
-          last_activity_at:
-            new Date()
+            referral || null
         });
 
-      await Wallet.create({
-        user_id:
-          user._id,
-        balance: 0,
-        updated_at:
-          new Date()
-      });
+      await ensureWallet(
+        user._id
+      );
 
-      req.session.userId =
-        user._id.toString();
-
-      req.session.isAdmin =
-        false;
-
-      return res.json({
+      res.json({
         success: true,
+
         message:
           'Registration successful.',
+
         user:
           safeUser(user)
       });
@@ -1101,14 +1190,15 @@ app.post(
         error
       );
 
-      return res.status(500).json({
+      res.status(500).json({
         success: false,
         message:
-          'Registration failed.'
+          'Unable to register.'
       });
     }
   }
 );
+
 
 // =====================================================
 // LOGIN
@@ -1120,21 +1210,15 @@ app.post(
     try {
       const phone =
         String(
-          req.body.phone || ''
+          req.body.phone ||
+          req.body.mobile ||
+          ''
         ).trim();
 
       const password =
         String(
           req.body.password || ''
         );
-
-      if (!phone || !password) {
-        return res.status(400).json({
-          success: false,
-          message:
-            'Phone and password are required.'
-        });
-      }
 
       const user =
         await User.findOne({
@@ -1145,7 +1229,7 @@ app.post(
         return res.status(401).json({
           success: false,
           message:
-            'Invalid phone or password.'
+            'Invalid mobile or password.'
         });
       }
 
@@ -1153,7 +1237,7 @@ app.post(
         return res.status(403).json({
           success: false,
           message:
-            'Your account has been banned.'
+            'Account is banned.'
         });
       }
 
@@ -1167,35 +1251,56 @@ app.post(
         return res.status(401).json({
           success: false,
           message:
-            'Invalid phone or password.'
+            'Invalid mobile or password.'
         });
       }
 
-      req.session.userId =
-        user._id.toString();
+      req.session.regenerate(
+        error => {
+          if (error) {
+            return res.status(500).json({
+              success: false,
+              message:
+                'Unable to create session.'
+            });
+          }
 
-      req.session.isAdmin =
-        false;
+          req.session.userId =
+            user._id.toString();
 
-      user.last_activity_at =
-        new Date();
+          req.session.isAdmin =
+            false;
 
-      await user.save();
+          req.session.save(
+            saveError => {
+              if (saveError) {
+                return res.status(500).json({
+                  success: false,
+                  message:
+                    'Unable to save session.'
+                });
+              }
 
-      return res.json({
-        success: true,
-        message:
-          'Login successful.',
-        user:
-          safeUser(user)
-      });
+              res.json({
+                success: true,
+
+                message:
+                  'Login successful.',
+
+                user:
+                  safeUser(user)
+              });
+            }
+          );
+        }
+      );
     } catch (error) {
       console.error(
         'Login error:',
         error
       );
 
-      return res.status(500).json({
+      res.status(500).json({
         success: false,
         message:
           'Login failed.'
@@ -1203,6 +1308,7 @@ app.post(
     }
   }
 );
+
 
 // =====================================================
 // ME
@@ -1212,41 +1318,15 @@ app.get(
   '/api/me',
   login,
   async (req, res) => {
-    try {
-      const wallet =
-        await ensureWallet(
-          req.session.userId
-        );
+    res.json({
+      success: true,
 
-      res.json({
-        success: true,
-        user:
-          safeUser(
-            req.currentUser
-          ),
-        wallet: {
-          balance:
-            paiseToMoney(
-              wallet.balance
-            ),
-          balance_paise:
-            wallet.balance
-        }
-      });
-    } catch (error) {
-      console.error(
-        'ME error:',
-        error
-      );
-
-      res.status(500).json({
-        success: false,
-        message:
-          'Unable to load account.'
-      });
-    }
+      user:
+        safeUser(req.user)
+    });
   }
 );
+
 
 // =====================================================
 // WALLET
@@ -1264,19 +1344,13 @@ app.get(
 
       res.json({
         success: true,
+
         balance:
           paiseToMoney(
             wallet.balance
-          ),
-        balance_paise:
-          wallet.balance
+          )
       });
     } catch (error) {
-      console.error(
-        'Wallet error:',
-        error
-      );
-
       res.status(500).json({
         success: false,
         message:
@@ -1285,6 +1359,7 @@ app.get(
     }
   }
 );
+
 
 // =====================================================
 // REFERRAL
@@ -1295,18 +1370,20 @@ app.get(
   login,
   async (req, res) => {
     try {
-      const code =
-        req.currentUser
-          .referral_code;
+      const referrals =
+        await User.countDocuments({
+          referred_by:
+            req.user.referral_code
+        });
 
       res.json({
         success: true,
 
         referral_code:
-          code,
+          req.user.referral_code,
 
-        referral_link:
-          `${APP_URL || ''}/register.html?ref=${encodeURIComponent(code)}`
+        referral_count:
+          referrals
       });
     } catch (error) {
       res.status(500).json({
@@ -1323,14 +1400,13 @@ app.get(
   login,
   async (req, res) => {
     try {
-      const referrals =
+      const users =
         await User.find({
           referred_by:
-            req.currentUser
-              .referral_code
+            req.user.referral_code
         })
         .select(
-          'name phone referral_code created_at'
+          'name phone created_at'
         )
         .sort({
           created_at: -1
@@ -1339,7 +1415,7 @@ app.get(
 
       res.json({
         success: true,
-        referrals
+        referrals: users
       });
     } catch (error) {
       res.status(500).json({
@@ -1351,6 +1427,7 @@ app.get(
   }
 );
 
+
 // =====================================================
 // WATCHPAYS PAY-IN CREATE
 // =====================================================
@@ -1360,27 +1437,6 @@ app.post(
   login,
   async (req, res) => {
     try {
-      const amount =
-        Number(
-          req.body.amount
-        );
-
-      const plan =
-        String(
-          req.body.plan || ''
-        ).trim();
-
-      if (
-        !Number.isFinite(amount) ||
-        amount <= 0
-      ) {
-        return res.status(400).json({
-          success: false,
-          message:
-            'Invalid amount.'
-        });
-      }
-
       if (
         !WATCHPAYS_MERCHANT_ID ||
         !WATCHPAYS_API_KEY
@@ -1392,7 +1448,9 @@ app.post(
         });
       }
 
-      if (!WATCHPAYS_PAYIN_CALLBACK) {
+      if (
+        !WATCHPAYS_PAYIN_CALLBACK
+      ) {
         return res.status(500).json({
           success: false,
           message:
@@ -1400,8 +1458,39 @@ app.post(
         });
       }
 
+      const amount =
+        Number(
+          req.body.amount
+        );
+
+      const plan =
+        req.body.plan ||
+        null;
+
+      if (
+        !Number.isFinite(amount) ||
+        amount <= 0
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'Invalid payment amount.'
+        });
+      }
+
+      if (amount < 1) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'Invalid payment amount.'
+        });
+      }
+
       const merchantOrderNo =
         makeRef('WP');
+
+      const amountString =
+        amount.toFixed(2);
 
       const signature =
         watchPayinSignature({
@@ -1409,7 +1498,7 @@ app.post(
             WATCHPAYS_MERCHANT_ID,
 
           amount:
-            amount.toFixed(2),
+            amountString,
 
           merchant_order_no:
             merchantOrderNo,
@@ -1418,7 +1507,7 @@ app.post(
             WATCHPAYS_PAYIN_CALLBACK
         });
 
-      const payload = {
+      const body = {
         merchant_id:
           WATCHPAYS_MERCHANT_ID,
 
@@ -1426,7 +1515,7 @@ app.post(
           WATCHPAYS_API_KEY,
 
         amount:
-          amount.toFixed(2),
+          amountString,
 
         merchant_order_no:
           merchantOrderNo,
@@ -1434,11 +1523,17 @@ app.post(
         callback_url:
           WATCHPAYS_PAYIN_CALLBACK,
 
-        extra:
-          plan || 'NOVE',
-
         signature
       };
+
+      if (
+        req.body.extra !== undefined
+      ) {
+        body.extra =
+          String(
+            req.body.extra
+          );
+      }
 
       const response =
         await fetch(
@@ -1455,32 +1550,52 @@ app.post(
             },
 
             body:
-              JSON.stringify(
-                payload
-              )
+              JSON.stringify(body)
           }
         );
 
-      const result =
-        await response.json()
-          .catch(() => null);
+      const text =
+        await response.text();
+
+      let result;
+
+      try {
+        result =
+          JSON.parse(text);
+      } catch {
+        result = {
+          raw: text
+        };
+      }
 
       console.log(
         'WatchPays Pay-in response:',
-        result
+        {
+          status:
+            response.status,
+
+          success:
+            result?.success,
+
+          merchant_order_no:
+            result?.merchant_order_no,
+
+          order_no:
+            result?.order_no
+        }
       );
 
       if (
         !response.ok ||
-        !result ||
-        !result.success ||
-        !result.payment_url
+        result?.success !== true ||
+        !result?.payment_url
       ) {
-        return res.status(502).json({
+        return res.status(400).json({
           success: false,
+
           message:
             result?.message ||
-            'WatchPays payment URL was not returned.'
+            'WatchPays payment creation failed.'
         });
       }
 
@@ -1551,6 +1666,7 @@ app.post(
     }
   }
 );
+
 
 // =====================================================
 // WATCHPAYS PAY-IN CALLBACK
@@ -1669,7 +1785,8 @@ app.post(
             }
 
             if (
-              fresh.status === 'paid'
+              fresh.status === 'paid' ||
+              fresh.status === 'captured'
             ) {
               return;
             }
@@ -1705,38 +1822,49 @@ app.post(
                 mongoSession
             });
 
-            await WalletTransaction.create(
-              [
+            try {
+              await WalletTransaction.create(
+                [
+                  {
+                    user_id:
+                      fresh.user_id,
+
+                    type:
+                      'credit',
+
+                    amount:
+                      credit,
+
+                    balance_after:
+                      newBalance,
+
+                    reference_type:
+                      'watchpays_payment',
+
+                    reference_id:
+                      String(
+                        fresh._id
+                      ),
+
+                    created_at:
+                      new Date()
+                  }
+                ],
                 {
-                  user_id:
-                    fresh.user_id,
-
-                  type:
-                    'credit',
-
-                  amount:
-                    credit,
-
-                  balance_after:
-                    newBalance,
-
-                  reference_type:
-                    'watchpays_payment',
-
-                  reference_id:
-                    String(
-                      fresh._id
-                    ),
-
-                  created_at:
-                    new Date()
+                  session:
+                    mongoSession
                 }
-              ],
-              {
-                session:
-                  mongoSession
+              );
+            } catch (transactionError) {
+              if (
+                transactionError.code ===
+                11000
+              ) {
+                return;
               }
-            );
+
+              throw transactionError;
+            }
 
             fresh.status =
               'paid';
@@ -1775,6 +1903,7 @@ app.post(
   }
 );
 
+
 // =====================================================
 // WATCHPAYS PAYOUT
 // =====================================================
@@ -1804,7 +1933,7 @@ async function sendWatchPayout(
     'BANK'
   ) {
     throw new Error(
-      'WatchPays payout API supplied for this integration supports BANK fields only.'
+      'WatchPays payout integration supports BANK withdrawals only.'
     );
   }
 
@@ -1828,13 +1957,16 @@ async function sendWatchPayout(
       withdrawal.amount
     );
 
+  const amountString =
+    amount.toFixed(2);
+
   const signature =
     watchPayoutSignature({
       merchant_id:
         WATCHPAYS_MERCHANT_ID,
 
       amount:
-        amount.toFixed(2),
+        amountString,
 
       transaction_id:
         transactionId,
@@ -1866,7 +1998,7 @@ async function sendWatchPayout(
 
   form.set(
     'amount',
-    amount.toFixed(2)
+    amountString
   );
 
   form.set(
@@ -1939,7 +2071,16 @@ async function sendWatchPayout(
 
   console.log(
     'WatchPays Payout response:',
-    result
+    {
+      status:
+        response.status,
+
+      gatewayStatus:
+        result?.status,
+
+      transaction_id:
+        result?.data?.transaction_id
+    }
   );
 
   if (
@@ -1972,6 +2113,7 @@ async function sendWatchPayout(
       result
   };
 }
+
 
 // =====================================================
 // WATCHPAYS PAYOUT CALLBACK
@@ -2058,9 +2200,9 @@ app.post(
         );
 
       if (
-        Number.isFinite(
+        !Number.isFinite(
           callbackAmount
-        ) &&
+        ) ||
         Math.abs(
           callbackAmount -
           expectedAmount
@@ -2103,71 +2245,68 @@ app.post(
         normalizedStatus ===
         'FAILED'
       ) {
-        if (
-          withdrawal.status !==
-          'rejected'
-        ) {
-          const mongoSession =
-            await mongoose.startSession();
+        const mongoSession =
+          await mongoose.startSession();
 
-          try {
-            await mongoSession.withTransaction(
-              async () => {
-                const fresh =
-                  await Withdrawal.findById(
-                    withdrawal._id
-                  ).session(
-                    mongoSession
-                  );
+        try {
+          await mongoSession.withTransaction(
+            async () => {
+              const fresh =
+                await Withdrawal.findById(
+                  withdrawal._id
+                ).session(
+                  mongoSession
+                );
 
-                if (!fresh) {
-                  throw new Error(
-                    'Withdrawal not found.'
-                  );
-                }
+              if (!fresh) {
+                throw new Error(
+                  'Withdrawal not found.'
+                );
+              }
 
-                if (
-                  fresh.status ===
-                  'completed'
-                ) {
-                  return;
-                }
+              if (
+                fresh.status ===
+                'completed'
+              ) {
+                return;
+              }
 
-                if (
-                  fresh.status ===
-                  'rejected'
-                ) {
-                  return;
-                }
+              if (
+                fresh.status ===
+                'rejected'
+              ) {
+                return;
+              }
 
-                const wallet =
-                  await ensureWallet(
-                    fresh.user_id,
-                    mongoSession
-                  );
+              const wallet =
+                await ensureWallet(
+                  fresh.user_id,
+                  mongoSession
+                );
 
-                const oldBalance =
-                  Number(
-                    wallet.balance || 0
-                  );
+              const oldBalance =
+                Number(
+                  wallet.balance || 0
+                );
 
-                const newBalance =
-                  oldBalance +
-                  Number(
-                    fresh.amount
-                  );
+              const newBalance =
+                oldBalance +
+                Number(
+                  fresh.amount
+                );
 
-                wallet.balance =
-                  newBalance;
+              wallet.balance =
+                newBalance;
 
-                wallet.updated_at =
-                  new Date();
+              wallet.updated_at =
+                new Date();
 
-                await wallet.save({
-                  session:
-                    mongoSession
-                });
+              await wallet.save({
+                session:
+                  mongoSession
+              });
 
+              try {
                 await WalletTransaction.create(
                   [
                     {
@@ -2189,7 +2328,10 @@ app.post(
                       reference_id:
                         String(
                           fresh._id
-                        )
+                        ),
+
+                      created_at:
+                        new Date()
                     }
                   ],
                   {
@@ -2197,28 +2339,37 @@ app.post(
                       mongoSession
                   }
                 );
+              } catch (transactionError) {
+                if (
+                  transactionError.code ===
+                  11000
+                ) {
+                  return;
+                }
 
-                fresh.status =
-                  'rejected';
-
-                fresh.gateway =
-                  'WATCHPAYS';
-
-                fresh.gateway_transaction_id =
-                  transaction_id;
-
-                fresh.processed_at =
-                  new Date();
-
-                await fresh.save({
-                  session:
-                    mongoSession
-                });
+                throw transactionError;
               }
-            );
-          } finally {
-            await mongoSession.endSession();
-          }
+
+              fresh.status =
+                'rejected';
+
+              fresh.gateway =
+                'WATCHPAYS';
+
+              fresh.gateway_transaction_id =
+                transaction_id;
+
+              fresh.processed_at =
+                new Date();
+
+              await fresh.save({
+                session:
+                  mongoSession
+              });
+            }
+          );
+        } finally {
+          await mongoSession.endSession();
         }
 
         return res.send(
@@ -2241,6 +2392,463 @@ app.post(
     }
   }
 );
+
+
+// =====================================================
+// RS PAYMENT CREATE
+// =====================================================
+
+app.post(
+  '/api/payment/create-order',
+  login,
+  async (req, res) => {
+    try {
+      if (
+        !RSPAY_MERCHANT_ID ||
+        !RSPAY_ACCESS_KEY ||
+        !RSPAY_API_URL
+      ) {
+        return res.status(500).json({
+          success: false,
+          message:
+            'RS Payment is not configured.'
+        });
+      }
+
+      const amount =
+        Number(
+          req.body.amount
+        );
+
+      const plan =
+        req.body.plan ||
+        null;
+
+      if (
+        !Number.isFinite(amount) ||
+        amount <= 0
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'Invalid amount.'
+        });
+      }
+
+      const merchantOrderNo =
+        makeRef('RS');
+
+      const payload = {
+        merchant_id:
+          RSPAY_MERCHANT_ID,
+
+        access_key:
+          RSPAY_ACCESS_KEY,
+
+        amount:
+          amount.toFixed(2),
+
+        merchant_order_no:
+          merchantOrderNo,
+
+        callback_url:
+          RSPAY_WEBHOOK_URL,
+
+        return_url:
+          RSPAY_RETURN_URL
+      };
+
+      const response =
+        await fetch(
+          RSPAY_API_URL,
+          {
+            method: 'POST',
+
+            headers: {
+              'Content-Type':
+                'application/json',
+
+              Accept:
+                'application/json'
+            },
+
+            body:
+              JSON.stringify(payload)
+          }
+        );
+
+      const text =
+        await response.text();
+
+      let result;
+
+      try {
+        result =
+          JSON.parse(text);
+      } catch {
+        result = {
+          raw: text
+        };
+      }
+
+      if (
+        !response.ok
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            result?.message ||
+            'RS Payment request failed.'
+        });
+      }
+
+      const paymentUrl =
+        result?.payment_url ||
+        result?.pay_url ||
+        result?.url;
+
+      if (!paymentUrl) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'Payment URL was not returned.'
+        });
+      }
+
+      const payment =
+        await Payment.create({
+          user_id:
+            req.session.userId,
+
+          plan,
+
+          amount:
+            moneyToPaise(amount),
+
+          currency:
+            'INR',
+
+          merchant_order_id:
+            merchantOrderNo,
+
+          platform_order_id:
+            result?.order_no ||
+            result?.platform_order_id ||
+            null,
+
+          pay_url:
+            paymentUrl,
+
+          gateway:
+            'RSPAY',
+
+          status:
+            result?.status ||
+            'created'
+        });
+
+      res.json({
+        success: true,
+
+        paymentId:
+          payment._id,
+
+        merchant_order_no:
+          merchantOrderNo,
+
+        order_no:
+          result?.order_no ||
+          null,
+
+        payment_url:
+          paymentUrl,
+
+        payUrl:
+          paymentUrl,
+
+        amount
+      });
+    } catch (error) {
+      console.error(
+        'RS Payment create error:',
+        error
+      );
+
+      res.status(500).json({
+        success: false,
+        message:
+          'Unable to create payment.'
+      });
+    }
+  }
+);
+
+
+// =====================================================
+// RS PAYMENT WEBHOOK
+// =====================================================
+
+app.post(
+  '/api/payment/webhook',
+  async (req, res) => {
+    try {
+      console.log(
+        'RS Payment webhook received.'
+      );
+
+      const merchantOrder =
+        req.body.merchant_order_no ||
+        req.body.merchantOrder ||
+        req.body.order_id ||
+        req.body.orderId;
+
+      const status =
+        String(
+          req.body.status ||
+          ''
+        ).toLowerCase();
+
+      const amount =
+        Number(
+          req.body.amount
+        );
+
+      if (!merchantOrder) {
+        return res.status(400).send(
+          'order missing'
+        );
+      }
+
+      const payment =
+        await Payment.findOne({
+          merchant_order_id:
+            merchantOrder
+        });
+
+      if (!payment) {
+        return res.status(404).send(
+          'order not found'
+        );
+      }
+
+      if (
+        payment.status ===
+          'paid' ||
+        payment.status ===
+          'captured'
+      ) {
+        return res.send(
+          'success'
+        );
+      }
+
+      if (
+        ![
+          'success',
+          'paid',
+          'completed',
+          'captured'
+        ].includes(status)
+      ) {
+        payment.status =
+          status ||
+          'failed';
+
+        await payment.save();
+
+        return res.send(
+          'success'
+        );
+      }
+
+      const expectedAmount =
+        paiseToMoney(
+          payment.amount
+        );
+
+      if (
+        !Number.isFinite(amount) ||
+        Math.abs(
+          amount -
+          expectedAmount
+        ) > 0.01
+      ) {
+        return res.status(400).send(
+          'amount mismatch'
+        );
+      }
+
+      const mongoSession =
+        await mongoose.startSession();
+
+      try {
+        await mongoSession.withTransaction(
+          async () => {
+            const fresh =
+              await Payment.findById(
+                payment._id
+              ).session(
+                mongoSession
+              );
+
+            if (
+              fresh.status ===
+              'paid'
+            ) {
+              return;
+            }
+
+            const wallet =
+              await ensureWallet(
+                fresh.user_id,
+                mongoSession
+              );
+
+            const old =
+              Number(
+                wallet.balance || 0
+              );
+
+            const next =
+              old +
+              Number(
+                fresh.amount
+              );
+
+            wallet.balance =
+              next;
+
+            wallet.updated_at =
+              new Date();
+
+            await wallet.save({
+              session:
+                mongoSession
+            });
+
+            await WalletTransaction.create(
+              [
+                {
+                  user_id:
+                    fresh.user_id,
+
+                  type:
+                    'credit',
+
+                  amount:
+                    fresh.amount,
+
+                  balance_after:
+                    next,
+
+                  reference_type:
+                    'payment',
+
+                  reference_id:
+                    String(
+                      fresh._id
+                    )
+                }
+              ],
+              {
+                session:
+                  mongoSession
+              }
+            );
+
+            fresh.status =
+              'paid';
+
+            fresh.paid_at =
+              new Date();
+
+            await fresh.save({
+              session:
+                mongoSession
+            });
+          }
+        );
+      } finally {
+        await mongoSession.endSession();
+      }
+
+      res.send(
+        'success'
+      );
+    } catch (error) {
+      console.error(
+        'RS webhook error:',
+        error
+      );
+
+      res.status(500).send(
+        'callback error'
+      );
+    }
+  }
+);
+
+
+// =====================================================
+// PAYMENT STATUS
+// =====================================================
+
+app.get(
+  '/api/payment/status/:orderId',
+  login,
+  async (req, res) => {
+    try {
+      const payment =
+        await Payment.findOne({
+          _id:
+            mongoose.isValidObjectId(
+              req.params.orderId
+            )
+              ? req.params.orderId
+              : null,
+
+          user_id:
+            req.session.userId
+        }).lean();
+
+      if (!payment) {
+        return res.status(404).json({
+          success: false,
+          message:
+            'Payment not found.'
+        });
+      }
+
+      res.json({
+        success: true,
+
+        status:
+          payment.status,
+
+        amount:
+          paiseToMoney(
+            payment.amount
+          ),
+
+        gateway:
+          payment.gateway,
+
+        merchant_order_id:
+          payment.merchant_order_id,
+
+        platform_order_id:
+          payment.platform_order_id
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message:
+          'Unable to load payment status.'
+      });
+    }
+  }
+);
+
 
 // =====================================================
 // ORDERS
@@ -2310,6 +2918,7 @@ app.get(
     }
   }
 );
+
 
 // =====================================================
 // WITHDRAWAL REQUEST
@@ -2401,9 +3010,10 @@ app.post(
       }
 
       if (
-        !['UPI', 'BANK'].includes(
-          method
-        )
+        ![
+          'UPI',
+          'BANK'
+        ].includes(method)
       ) {
         return res.status(400).json({
           success: false,
@@ -2413,15 +3023,14 @@ app.post(
       }
 
       if (
-        method === 'UPI'
+        method === 'UPI' &&
+        !upiId
       ) {
-        if (!upiId) {
-          return res.status(400).json({
-            success: false,
-            message:
-              'UPI ID is required.'
-          });
-        }
+        return res.status(400).json({
+          success: false,
+          message:
+            'UPI ID is required.'
+        });
       }
 
       if (
@@ -2646,12 +3255,14 @@ app.post(
       });
     } finally {
       if (mongoSession) {
-        await mongoSession.endSession()
+        await mongoSession
+          .endSession()
           .catch(() => {});
       }
     }
   }
 );
+
 
 // =====================================================
 // USER WITHDRAWAL HISTORY
@@ -2710,6 +3321,9 @@ app.get(
               gateway:
                 w.gateway,
 
+              gateway_transaction_id:
+                w.gateway_transaction_id,
+
               status:
                 w.status,
 
@@ -2730,6 +3344,7 @@ app.get(
     }
   }
 );
+
 
 // =====================================================
 // ADMIN LOGIN
@@ -2824,6 +3439,7 @@ app.post(
   }
 );
 
+
 // =====================================================
 // ADMIN ME
 // =====================================================
@@ -2838,6 +3454,7 @@ app.get(
     });
   }
 );
+
 
 // =====================================================
 // ADMIN LOGOUT
@@ -2877,6 +3494,7 @@ app.post(
     );
   }
 );
+
 
 // =====================================================
 // ADMIN USERS
@@ -2956,8 +3574,9 @@ app.get(
   }
 );
 
+
 // =====================================================
-// BAN / UNBAN
+// BAN
 // =====================================================
 
 app.post(
@@ -2997,6 +3616,11 @@ app.post(
   }
 );
 
+
+// =====================================================
+// UNBAN
+// =====================================================
+
 app.post(
   '/api/admin/users/:userId/unban',
   admin,
@@ -3033,6 +3657,7 @@ app.post(
     }
   }
 );
+
 
 // =====================================================
 // LOGIN AS USER
@@ -3109,6 +3734,7 @@ app.post(
   }
 );
 
+
 // =====================================================
 // ADMIN BALANCE
 // =====================================================
@@ -3144,9 +3770,10 @@ app.post(
       }
 
       if (
-        !['credit', 'debit'].includes(
-          type
-        )
+        ![
+          'credit',
+          'debit'
+        ].includes(type)
       ) {
         return res.status(400).json({
           success: false,
@@ -3242,6 +3869,7 @@ app.post(
 
       res.json({
         success: true,
+
         balance:
           paiseToMoney(
             finalBalance
@@ -3255,11 +3883,13 @@ app.post(
           'Unable to update balance.'
       });
     } finally {
-      await mongoSession.endSession()
+      await mongoSession
+        .endSession()
         .catch(() => {});
     }
   }
 );
+
 
 // =====================================================
 // ADMIN WITHDRAWALS
@@ -3336,6 +3966,11 @@ app.get(
               gateway_transaction_id:
                 w.gateway_transaction_id,
 
+              gateway_fee:
+                paiseToMoney(
+                  w.gateway_fee || 0
+                ),
+
               status:
                 w.status,
 
@@ -3362,8 +3997,9 @@ app.get(
   }
 );
 
+
 // =====================================================
-// ADMIN PROCESS WITHDRAWAL
+// PROCESS WITHDRAWAL
 // =====================================================
 
 async function processWithdrawal(
@@ -3386,9 +4022,7 @@ async function processWithdrawal(
 
     if (
       withdrawal.status !==
-        'pending' &&
-      withdrawal.status !==
-        'processing'
+      'pending'
     ) {
       return res.status(400).json({
         success: false,
@@ -3416,6 +4050,13 @@ async function processWithdrawal(
             'Payout has already been submitted.'
         });
       }
+
+      /*
+       * IMPORTANT:
+       * Gateway call happens BEFORE changing
+       * withdrawal status. So if gateway fails,
+       * the withdrawal remains pending.
+       */
 
       const payout =
         await sendWatchPayout(
@@ -3506,6 +4147,7 @@ app.post(
   processWithdrawal
 );
 
+
 // =====================================================
 // ADMIN COMPLETE
 // =====================================================
@@ -3562,8 +4204,9 @@ app.post(
   }
 );
 
+
 // =====================================================
-// ADMIN REJECT + REFUND
+// REJECT + REFUND
 // =====================================================
 
 async function rejectWithdrawal(
@@ -3595,6 +4238,15 @@ async function rejectWithdrawal(
         ) {
           throw new Error(
             'Completed withdrawal cannot be rejected.'
+          );
+        }
+
+        if (
+          withdrawal.status ===
+          'processing'
+        ) {
+          throw new Error(
+            'Processing withdrawal should not be manually rejected. Wait for gateway result.'
           );
         }
 
@@ -3633,35 +4285,46 @@ async function rejectWithdrawal(
             mongoSession
         });
 
-        await WalletTransaction.create(
-          [
+        try {
+          await WalletTransaction.create(
+            [
+              {
+                user_id:
+                  withdrawal.user_id,
+
+                type:
+                  'refund',
+
+                amount:
+                  withdrawal.amount,
+
+                balance_after:
+                  next,
+
+                reference_type:
+                  'withdrawal_refund',
+
+                reference_id:
+                  String(
+                    withdrawal._id
+                  )
+              }
+            ],
             {
-              user_id:
-                withdrawal.user_id,
-
-              type:
-                'refund',
-
-              amount:
-                withdrawal.amount,
-
-              balance_after:
-                next,
-
-              reference_type:
-                'withdrawal_refund',
-
-              reference_id:
-                String(
-                  withdrawal._id
-                )
+              session:
+                mongoSession
             }
-          ],
-          {
-            session:
-              mongoSession
+          );
+        } catch (transactionError) {
+          if (
+            transactionError.code ===
+            11000
+          ) {
+            return;
           }
-        );
+
+          throw transactionError;
+        }
 
         withdrawal.status =
           'rejected';
@@ -3689,7 +4352,8 @@ async function rejectWithdrawal(
         'Unable to reject withdrawal.'
     });
   } finally {
-    await mongoSession.endSession()
+    await mongoSession
+      .endSession()
       .catch(() => {});
   }
 }
@@ -3705,6 +4369,7 @@ app.post(
   admin,
   rejectWithdrawal
 );
+
 
 // =====================================================
 // ADMIN VIP
@@ -3755,8 +4420,10 @@ app.post(
 
       res.json({
         success: true,
+
         message:
           'VIP level updated.',
+
         vip_level:
           user.vip_level
       });
@@ -3774,15 +4441,45 @@ app.post(
   '/api/admin/users/:userId/vip5',
   admin,
   async (req, res) => {
-    req.body.vip_level = 5;
+    try {
+      const user =
+        await User.findByIdAndUpdate(
+          req.params.userId,
+          {
+            vip_level: 5
+          },
+          {
+            new: true
+          }
+        );
 
-    return app._router.handle(
-      req,
-      res,
-      () => {}
-    );
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message:
+            'User not found.'
+        });
+      }
+
+      res.json({
+        success: true,
+
+        message:
+          'VIP 5 updated.',
+
+        vip_level:
+          user.vip_level
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message:
+          'Unable to update VIP.'
+      });
+    }
   }
 );
+
 
 // =====================================================
 // PLANS
@@ -3814,6 +4511,11 @@ app.get(
     }
   }
 );
+
+
+// =====================================================
+// ADMIN CREATE PLAN
+// =====================================================
 
 app.post(
   '/api/admin/plans',
@@ -3868,6 +4570,7 @@ app.post(
   }
 );
 
+
 // =====================================================
 // INVESTMENTS
 // =====================================================
@@ -3900,6 +4603,7 @@ app.get(
     }
   }
 );
+
 
 app.post(
   '/api/investments',
@@ -4070,6 +4774,7 @@ app.post(
   }
 );
 
+
 // =====================================================
 // TRANSACTIONS
 // =====================================================
@@ -4133,6 +4838,7 @@ app.get(
   }
 );
 
+
 // =====================================================
 // NOTIFICATIONS
 // =====================================================
@@ -4167,6 +4873,7 @@ app.get(
   }
 );
 
+
 app.post(
   '/api/notifications/:id/read',
   login,
@@ -4200,6 +4907,7 @@ app.post(
   }
 );
 
+
 // =====================================================
 // ADMIN NOTIFICATION
 // =====================================================
@@ -4220,7 +4928,8 @@ app.post(
         ).trim();
 
       const userId =
-        req.body.user_id || null;
+        req.body.user_id ||
+        null;
 
       if (
         !title ||
@@ -4237,7 +4946,9 @@ app.post(
         await Notification.create({
           user_id:
             userId,
+
           title,
+
           message
         });
       } else {
@@ -4252,7 +4963,9 @@ app.post(
               user => ({
                 user_id:
                   user._id,
+
                 title,
+
                 message
               })
             )
@@ -4274,6 +4987,7 @@ app.post(
     }
   }
 );
+
 
 // =====================================================
 // SETTINGS
@@ -4311,6 +5025,7 @@ app.get(
     }
   }
 );
+
 
 app.post(
   '/api/admin/settings',
@@ -4365,6 +5080,7 @@ app.post(
   }
 );
 
+
 // =====================================================
 // ADMIN SUMMARY
 // =====================================================
@@ -4412,6 +5128,7 @@ app.get(
               }
             }
           },
+
           {
             $group: {
               _id: null,
@@ -4469,24 +5186,33 @@ app.get(
           ).toLowerCase();
 
         if (
-          status === 'pending'
+          status ===
+          'pending'
         ) {
           pending =
-            Number(row.count);
+            Number(
+              row.count
+            );
         }
 
         if (
-          status === 'processing'
+          status ===
+          'processing'
         ) {
           processing =
-            Number(row.count);
+            Number(
+              row.count
+            );
         }
 
         if (
-          status === 'completed'
+          status ===
+          'completed'
         ) {
           completed =
-            Number(row.count);
+            Number(
+              row.count
+            );
 
           totalWithdrawn +=
             Number(
@@ -4534,17 +5260,25 @@ app.get(
             totalPayments
           ),
 
+        totalDeposits:
+          paiseToMoney(
+            totalPayments
+          ),
+
+        total_deposits:
+          paiseToMoney(
+            totalPayments
+          ),
+
         successful_payments:
           successfulPayments,
 
-        pending:
-          pending,
+        pending,
 
         pending_withdrawals:
           pending,
 
-        processing:
-          processing,
+        processing,
 
         processing_withdrawals:
           processing,
@@ -4577,6 +5311,7 @@ app.get(
   }
 );
 
+
 // =====================================================
 // TOTAL USERS
 // =====================================================
@@ -4591,6 +5326,7 @@ app.get(
 
       res.json({
         success: true,
+
         total_users:
           total
       });
@@ -4603,6 +5339,7 @@ app.get(
     }
   }
 );
+
 
 // =====================================================
 // ADMIN ACTIVITY
@@ -4635,6 +5372,7 @@ app.get(
   }
 );
 
+
 // =====================================================
 // LOGOUT
 // =====================================================
@@ -4664,6 +5402,7 @@ app.post(
 
         res.json({
           success: true,
+
           message:
             'Logged out successfully.'
         });
@@ -4671,6 +5410,7 @@ app.post(
     );
   }
 );
+
 
 // =====================================================
 // STATIC FILES
@@ -4685,6 +5425,7 @@ app.use(
     }
   )
 );
+
 
 // =====================================================
 // ADMIN STATIC
@@ -4704,6 +5445,7 @@ app.use(
   )
 );
 
+
 // =====================================================
 // ADMIN PAGES
 // =====================================================
@@ -4720,6 +5462,7 @@ app.get(
   }
 );
 
+
 app.get(
   '/admin-dashboard.html',
   (req, res) => {
@@ -4731,6 +5474,7 @@ app.get(
     );
   }
 );
+
 
 // =====================================================
 // ROOT
@@ -4748,8 +5492,9 @@ app.get(
   }
 );
 
+
 // =====================================================
-// 404 API
+// API 404
 // =====================================================
 
 app.use(
@@ -4757,11 +5502,13 @@ app.use(
   (req, res) => {
     res.status(404).json({
       success: false,
+
       message:
         'API endpoint not found.'
     });
   }
 );
+
 
 // =====================================================
 // ERROR HANDLER
@@ -4779,17 +5526,21 @@ app.use(
       err
     );
 
-    if (res.headersSent) {
+    if (
+      res.headersSent
+    ) {
       return next(err);
     }
 
     res.status(500).json({
       success: false,
+
       message:
         'Internal server error.'
     });
   }
 );
+
 
 // =====================================================
 // START SERVER
@@ -4797,6 +5548,12 @@ app.use(
 
 async function startServer() {
   try {
+    if (!MONGO_URI) {
+      throw new Error(
+        'MONGODB_URI / MONGO_URI is missing.'
+      );
+    }
+
     await mongoose.connect(
       MONGO_URI
     );
