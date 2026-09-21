@@ -50,6 +50,36 @@ const APP_URL =
   (process.env.APP_URL || '').replace(/\/+$/, '');
 
 // =====================================================
+// RS PAYMENT CONFIG
+// =====================================================
+
+const RSPAY_MERCHANT_ID =
+  process.env.RSPAY_MERCHANT_ID || '';
+
+const RSPAY_ACCESS_KEY =
+  process.env.RSPAY_ACCESS_KEY || '';
+
+const RSPAY_API_URL =
+  process.env.RSPAY_API_URL ||
+  'https://rspayment.shop/api.php';
+
+const RSPAY_WITHDRAW_URL =
+  process.env.RSPAY_WITHDRAW_URL ||
+  'https://rspayment.shop/withdraw_api.php';
+
+const RSPAY_WEBHOOK_URL =
+  process.env.RSPAY_WEBHOOK_URL ||
+  (APP_URL
+    ? `${APP_URL}/api/payment/webhook`
+    : '');
+
+const RSPAY_RETURN_URL =
+  process.env.RSPAY_RETURN_URL ||
+  (APP_URL
+    ? `${APP_URL}/payment-success.html`
+    : '');
+
+// =====================================================
 // WATCHPAYS CONFIG
 // =====================================================
 
